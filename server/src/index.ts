@@ -7,6 +7,10 @@ import swaggerUi from "swagger-ui-express";
 import { loadConfig } from "./config";
 import { AppError } from "./errors/AppError";
 import {
+  createSubTenantHandler,
+  getSubTenantsHandler,
+} from "./handlers/subTenantHandler";
+import {
   listApiKeysHandler,
   revokeApiKeyHandler,
   updateApiKeyChainsHandler,
@@ -109,24 +113,33 @@ import {
   getSARReportHandler,
   reviewSARReportHandler,
   getSARStatsHandler,
-  exportSARReportsHandler
+  exportSARReportsHandler,
 } from "./handlers/adminSAR";
 import { getSpendForecastHandler } from "./handlers/adminAnalytics";
 import { getFeeMultiplierHandler } from "./handlers/adminFeeMultiplier";
 import { estimateFeeHandler } from "./handlers/estimate";
 import { initializeDigestWorker } from "./workers/digestWorker";
-import { initializeTenantErasureWorker, TenantErasureWorker } from "./workers/tenantErasureWorker";
+import {
+  initializeTenantErasureWorker,
+  TenantErasureWorker,
+} from "./workers/tenantErasureWorker";
 
 import { initializeTreasuryRefill } from "./workers/treasuryRefill";
 import { initializeTreasurySweeper } from "./tasks/sweeper";
 import { TreasuryRebalancer } from "./services/treasuryRebalancer";
 import { initializeFeeManager } from "./services/feeManager";
-import { initializeOFACScreening, stopOFACScreening } from "./services/ofacScreening";
+import {
+  initializeOFACScreening,
+  stopOFACScreening,
+} from "./services/ofacScreening";
 import { initializeRegionalDbs, DEFAULT_REGION } from "./services/regionRouter";
 import { requireAuthenticatedAdmin, requirePermission } from "./utils/adminAuth";
 import { ensureAuditLogTableIntegrity } from "./services/auditLogger";
 import { ipFilterMiddleware } from "./middleware/ipFilter";
-import { deleteCurrentTenantHandler, deleteTenantByAdminHandler } from "./handlers/tenantErasure";
+import {
+  deleteCurrentTenantHandler,
+  deleteTenantByAdminHandler,
+} from "./handlers/tenantErasure";
 import { listAuditLogsHandler } from "./handlers/adminAuditLogs";
 import { exportAuditLogHandler } from "./handlers/adminAuditLog";
 import { getMultiChainStatsHandler } from "./handlers/adminMultiChainStats";
@@ -148,7 +161,6 @@ import {
 import { enterpriseWhiteLabelHandler } from "./handlers/enterpriseWhiteLabel";
 import { fiatToFeeGatewayHandler } from "./handlers/fiatToFeeGateway";
 import { enhancedWebhooksV2Handler } from "./handlers/enhancedWebhooksV2";
-
 
 const logger = createLogger({ component: "server" });
 const config = loadConfig();
@@ -327,14 +339,13 @@ app.post(
   },
 );
 
-
 // Fee bump endpoint
 app.post(
   "/fee-bump",
   apiKeyMiddleware,
   apiKeyRateLimit,
   tenantTierTxLimit,
-  limiter,
+  limiter as any,
   (req: Request, res: Response, next: NextFunction) => {
     void feeBumpHandler(req, res, next, config);
   },
@@ -345,7 +356,7 @@ app.post(
   apiKeyMiddleware,
   apiKeyRateLimit,
   tenantTierTxLimit,
-  limiter,
+  limiter as any,
   (req: Request, res: Response, next: NextFunction) => {
     feeBumpBatchHandler(req, res, next, config);
   },
@@ -354,7 +365,6 @@ app.post(
 app.delete("/tenant", apiKeyMiddleware, (req: Request, res: Response, next: NextFunction) => {
   void deleteCurrentTenantHandler(req, res, next);
 });
-
 
 app.post(
   "/test/alerts/low-balance",
@@ -428,7 +438,6 @@ app.post("/admin/webhooks/dlq/replay", requirePermission("manage_config"), repla
 app.post("/admin/webhooks/dlq/delete", requirePermission("manage_config"), deleteDlqHandler);
 app.get("/admin/audit-log/export", requirePermission("view_audit_logs"), exportAuditLogHandler);
 
-
 // Notification centre routes (SSE must be registered before /:id/read)
 app.get("/admin/notifications/sse", (req: Request, res: Response) =>
   notificationSseHandler(req, res),
@@ -452,7 +461,7 @@ app.post(
   stripeWebhookHandler,
 );
 app.post("/create-checkout-session", createCheckoutSessionHandler);
-app.post("/estimate", limiter, estimateFeeHandler(config));
+app.post("/estimate", limiter as any, estimateFeeHandler(config));
 
 // Daily digest
 app.get("/admin/digest/unsubscribe", digestUnsubscribeHandler);
@@ -517,7 +526,6 @@ app.delete("/admin/chains/:id", (req: Request, res: Response) => {
   void deleteChainHandler(req, res);
 });
 
-
 app.get("/admin/sar/stats", (req: Request, res: Response) => {
   void getSARStatsHandler(req, res);
 });
@@ -537,6 +545,23 @@ app.patch("/admin/sar/:id/review", (req: Request, res: Response) => {
 app.post("/admin/enterprise/white-label", enterpriseWhiteLabelHandler);
 app.post("/fiat-to-fee/top-up", fiatToFeeGatewayHandler);
 app.post("/webhooks/v2", enhancedWebhooksV2Handler);
+
+// Sub-tenant (reseller accounts)
+app.post(
+  "/admin/tenants/:tenantId/sub-tenants",
+  requirePermission("manage_tenants"),
+  (req: Request, res: Response) => {
+    void createSubTenantHandler(req, res);
+  },
+);
+
+app.get(
+  "/admin/tenants/:tenantId/sub-tenants",
+  requirePermission("view_tenants"),
+  (req: Request, res: Response) => {
+    void getSubTenantsHandler(req, res);
+  },
+);
 
 app.use(notFoundHandler);
 app.use(createGlobalErrorHandler(slackNotifier));
@@ -605,12 +630,12 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 if (config.horizonUrls.length > 0) {
   try {
     const horizonFailoverClient = initializeHorizonFailoverClient(config);
-    ledgerMonitorInstance = initializeLedgerMonitor(
+    ledgerMonitor = initializeLedgerMonitor(
       config,
       undefined,
       horizonFailoverClient,
     );
-    ledgerMonitorInstance.start();
+    ledgerMonitor.start();
     logger.info("Ledger monitor worker started");
   } catch (error) {
     logger.error(
